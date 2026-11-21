@@ -6,7 +6,6 @@ python3 polish.py JWST --root "$CH" --minutes 10
 """
 import argparse
 import os
-import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,7 +13,7 @@ import numpy as np
 
 from cubesim import Problem
 from export_problem import export
-from search import BIN, HERE, build, load_cmds, score_file
+from search import HERE, build, load_cmds, run_bin, score_file
 
 
 def main():
@@ -40,8 +39,7 @@ def main():
 
     def chain(k):
         res = os.path.join(tmp, f"chain{k}.txt")
-        subprocess.run([BIN, "polish", ptxt, start, res, "100000000", str(a.seed * 1000 + k), str(a.minutes * 60)],
-                       capture_output=True, text=True)
+        run_bin(["polish", ptxt, start, res, "100000000", a.seed * 1000 + k, a.minutes * 60])
         return res
 
     with ThreadPoolExecutor(a.workers) as ex:

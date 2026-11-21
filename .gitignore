@@ -4,3 +4,5 @@ SpOC3/
 *.log
 cpp/cubes
 cpp/*.txt
+cpp/cubes.exe
+cpp/*.obj

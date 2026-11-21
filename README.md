@@ -31,6 +31,26 @@ door" by parking a correct neighbour of an unreachable cell and keeping that cel
 pocket is filled, (3) "shakes" a leftover cube to a random reachable cell. It keeps the best prefix. The C++ version also rejects (when it can) a placement that would make a nearby
 empty target cell impossible to enter (`seal` option).
 
+## Windows (PowerShell)
+
+1. Install Python 3 and `pip install numpy numba matplotlib`.
+2. Install a C++ compiler once. Easiest: [MSYS2](https://www.msys2.org), then in the "MSYS2 UCRT64" shell
+   run `pacman -S mingw-w64-ucrt-x86_64-gcc`. The scripts find `C:\msys64\ucrt64\bin\g++.exe` even if it
+   is not on PATH, and build `cpp\cubes.exe` statically so it runs without extra DLLs.
+   A "Developer PowerShell for Visual Studio" (MSVC `cl.exe`) also works, or point `$env:CXX` at any compiler.
+3. Run from the repo folder:
+
+```powershell
+git clone https://github.com/esa/SpOC3
+$CH = "SpOC3\Challenge 3 Programmable Cubes"
+python search.py ISS --root $CH --seeds 50 --urgent 2 3
+python polish.py JWST --root $CH --minutes 10
+python verify.py $CH ISS solutions\ISS.npy
+```
+
+`search.py` and `polish.py` use all CPU cores by default (`--workers N` to change). If the build fails, the
+script prints the compiler command and its output; delete `cpp\cubes.exe` to force a rebuild.
+
 Results (official fitness, lower is better, -1 is perfect):
 
 | Problem | Correct | Moves | Fitness |

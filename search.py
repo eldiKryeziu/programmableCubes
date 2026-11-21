@@ -1,10 +1,13 @@
 """Run the C++ solver on many seeds in parallel; keep the best solution as solutions/<problem>.npy.
 
 python3 search.py ISS --root "$CH" --seeds 200 --urgent 2 3 4
+(Windows: python search.py ISS --root $CH --seeds 200 --urgent 2 3 4)
 """
 import argparse
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,13 +17,76 @@ from cubesim import Problem
 from export_problem import export
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BIN = os.path.join(HERE, "cpp", "cubes")
+WINDOWS = os.name == "nt"
+BIN = os.path.join(HERE, "cpp", "cubes.exe" if WINDOWS else "cubes")
+SRC = os.path.join(HERE, "cpp", "cubes.cpp")
+
+# Where MSYS2 puts its compilers if they are not on PATH.
+MSYS2_DIRS = [r"C:\msys64\ucrt64\bin", r"C:\msys64\mingw64\bin", r"C:\msys64\clang64\bin"]
 
 
-def build():
-    src = os.path.join(HERE, "cpp", "cubes.cpp")
-    if not os.path.exists(BIN) or os.path.getmtime(BIN) < os.path.getmtime(src):
-        subprocess.check_call(["g++", "-O2", "-march=native", "-std=c++17", "-o", BIN, src])
+def find_compiler():
+    """Return (kind, path) of a C++ compiler: $CXX first, then g++, clang++, MSVC cl, then MSYS2 folders."""
+    env = os.environ.get("CXX")
+    if env:
+        exe = shutil.which(env) or env
+        return ("msvc" if os.path.basename(exe).lower().startswith("cl") else "gnu"), exe
+    for name in ["g++", "clang++"]:
+        exe = shutil.which(name)
+        if exe:
+            return "gnu", exe
+    if WINDOWS:
+        exe = shutil.which("cl")
+        if exe:
+            return "msvc", exe
+        for d in MSYS2_DIRS:
+            for name in ["g++.exe", "clang++.exe"]:
+                exe = os.path.join(d, name)
+                if os.path.exists(exe):
+                    return "gnu", exe
+    return None, None
+
+
+NO_COMPILER = """No C++ compiler found, so cpp/cubes.cpp cannot be built.
+
+Windows: install MSYS2 (https://www.msys2.org), then in the "MSYS2 UCRT64" shell run
+    pacman -S mingw-w64-ucrt-x86_64-gcc
+and either add C:\\msys64\\ucrt64\\bin to PATH or just rerun this script (it looks there too).
+Alternatively run from a "Developer PowerShell for Visual Studio" (MSVC cl.exe), or set $env:CXX.
+Linux/macOS: install g++ or clang++ (e.g. sudo apt install g++, or xcode-select --install).
+"""
+
+
+def build(force=False):
+    if not force and os.path.exists(BIN) and os.path.getmtime(BIN) >= os.path.getmtime(SRC):
+        return
+    kind, cxx = find_compiler()
+    if cxx is None:
+        sys.exit(NO_COMPILER)
+    if kind == "msvc":
+        attempts = [[cxx, "/nologo", "/O2", "/EHsc", "/std:c++17", SRC, "/Fe:" + BIN, "/Fo:" + os.path.join(HERE, "cpp") + os.sep]]
+    else:
+        # -static on Windows so cubes.exe runs without the MinGW DLLs on PATH
+        extra = ["-static"] if WINDOWS else []
+        base = [cxx, "-O2", "-std=c++17", "-o", BIN, SRC] + extra
+        attempts = [base[:2] + ["-march=native"] + base[2:], base]  # retry without -march=native if it fails
+    print(f"building {os.path.relpath(BIN, HERE)} with {cxx}", flush=True)
+    for cmd in attempts:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True)
+        except OSError as e:
+            sys.exit(f"could not run the compiler {cxx}: {e}\n\n{NO_COMPILER}")
+        if r.returncode == 0 and os.path.exists(BIN):
+            return
+    sys.exit(f"compiling cpp/cubes.cpp failed:\n{' '.join(cmd)}\n{r.stdout}{r.stderr}")
+
+
+def run_bin(args):
+    """Run the solver binary; stop with a readable message if it crashes or cannot start."""
+    r = subprocess.run([BIN] + [str(x) for x in args], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"{os.path.basename(BIN)} failed (exit code {r.returncode}):\n{r.stdout}{r.stderr}")
+    return r.stdout.strip()
 
 
 def load_cmds(path):
@@ -61,8 +127,7 @@ def main():
     def run(job):
         seed, u, sl = job
         res = os.path.join(tmp, f"s{seed}_u{u}_{sl}.txt")
-        line = subprocess.run([BIN, "solve", ptxt, str(seed), str(u), res, "1e9", str(a.shakes), str(a.repairs), str(sl)],
-                              capture_output=True, text=True).stdout.strip() + f" seal {sl}"
+        line = run_bin(["solve", ptxt, seed, u, res, "1e9", a.shakes, a.repairs, sl]) + f" seal {sl}"
         return line, res
 
     jobs = [(s, u, sl) for s in range(a.seed_offset, a.seed_offset + a.seeds) for u in a.urgent for sl in a.seal]

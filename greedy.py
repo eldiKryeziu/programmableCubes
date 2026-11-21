@@ -15,7 +15,7 @@ from collections import deque
 
 import numpy as np
 
-from cubesim import MOVES, Problem, land
+from cubesim import MOVES, NEIGH6, Problem, add, land
 
 
 def articulation_points(ens):
@@ -196,8 +196,52 @@ def open_door(prob, ens, ap, empty_targets_of_type, seen_states):
             if key in seen_states:
                 continue
             seen_states.add(key)
-            return d, mv
+            return d, mv, start, g
     return None
+
+
+def shake(prob, ens, ap, rng, seen_states):
+    """Stuck with leftover cubes that can reach no goal: move one of them to a random reachable
+    non-target cell. This changes which cubes are articulation points and opens new paths."""
+    loose = [c for c, p in enumerate(ens.pos) if prob.target.get(p) != ens.types[c] and c not in ap]
+    rng.shuffle(loose)
+    for c in loose[:20]:
+        start = ens.pos[c]
+        cells = reachable(ens.at, start, max_nodes=5000)
+        cand = [q for q in cells if q not in prob.target and q != start]
+        if not cand:
+            continue
+        q = cand[rng.integers(len(cand))]
+        key = hash(frozenset(ens.at) - {start} | {q})
+        if key in seen_states:
+            continue
+        seen_states.add(key)
+        return c, cells[q]
+    return None
+
+
+def reachable(at, start, max_nodes=5000):
+    """All cells the cube at `start` can reach, with the command list to get there."""
+    parent = {start: None}
+    dq = deque([start])
+    while dq and len(parent) < max_nodes:
+        p = dq.popleft()
+        for m in range(6):
+            q = land(at, p, m, ignore=start)
+            if q is None or q in parent or (q in at and q != start):
+                continue
+            parent[q] = (p, m)
+            dq.append(q)
+    out = {}
+    for q in parent:
+        if q == start:
+            continue
+        moves, r = [], q
+        while parent[r] is not None:
+            r, mm = parent[r]
+            moves.append(mm)
+        out[q] = moves[::-1]
+    return out
 
 
 def _adjacent(a, b):
@@ -208,13 +252,38 @@ def _second(start, moves, at):
     return land(at, start, moves[0], ignore=start)
 
 
-def solve(prob, max_nodes=200000, verbose=True, time_limit=None, urgent=3, max_repairs=200):
+def target_depth(prob):
+    """Depth of each target cell: 1 on the outer surface of the target shape, +1 per layer inwards."""
+    tgt = prob.target
+    depth = {}
+    dq = deque()
+    for p in tgt:
+        if any(add(p, n) not in tgt for n in NEIGH6):
+            depth[p] = 1
+            dq.append(p)
+    while dq:
+        p = dq.popleft()
+        for n in NEIGH6:
+            q = add(p, n)
+            if q in tgt and q not in depth:
+                depth[q] = depth[p] + 1
+                dq.append(q)
+    return depth
+
+
+def solve(prob, max_nodes=200000, verbose=True, time_limit=None, urgent=3, max_repairs=200,
+          max_shakes=300, seed=None, deep_first=False):
     ens = prob.ensemble()
     commands = []
     t0 = time.time()
     banned = set()
-    repairs, seen_states = 0, set()
-    while True:
+    repairs, shakes, seen_states = 0, 0, set()
+    rng = np.random.default_rng(seed)
+    doors = {}  # door cell -> walled-in cell it was opened for; door stays shut to refills until then
+    best = (prob.correct(ens), 0)
+    depth = target_depth(prob)
+    max_depth = max(depth.values())
+    while prob.correct(ens) < prob.n:
         ap = articulation_points(ens)
         movable_of_type, empty_targets_of_type = {}, {}
         for c, p in enumerate(ens.pos):
@@ -224,6 +293,13 @@ def solve(prob, max_nodes=200000, verbose=True, time_limit=None, urgent=3, max_r
         for p, ty in prob.target.items():
             if p not in ens.at:
                 empty_targets_of_type.setdefault(ty, []).append(p)
+        for door, pocket in list(doors.items()):
+            if pocket in ens.at:
+                del doors[door]
+        for ty, g in empty_targets_of_type.items():
+            g[:] = [p for p in g if p not in doors]
+            if seed is not None:
+                rng.shuffle(g)
         found = None
         # Evacuate wrong-type cubes that sit on target cells first, before they get walled in.
         squatters = {t: {c for c in cs if ens.pos[c] in prob.target} for t, cs in movable_of_type.items()}
@@ -236,6 +312,14 @@ def solve(prob, max_nodes=200000, verbose=True, time_limit=None, urgent=3, max_r
                     mv = forward_bfs(ens.at, ens.pos[c], lambda q: q not in prob.target)
                     if mv and (found is None or len(mv) < len(found[1])):
                         found = (c, mv)
+        # Optionally fill the target shape from the inside out (deepest reachable cells first).
+        if deep_first and found is None:
+            for d in range(max_depth, 1, -1):
+                tier = {t: [p for p in g if depth[p] >= d] for t, g in empty_targets_of_type.items()}
+                if any(tier.values()):
+                    found = find_move(prob, ens, movable_of_type, tier, banned, max_nodes)
+                    if found is not None:
+                        break
         # Fill cells that are about to be walled in first (many occupied face neighbours).
         if urgent and found is None:
             for u in range(6, urgent - 1, -1):
@@ -249,8 +333,15 @@ def solve(prob, max_nodes=200000, verbose=True, time_limit=None, urgent=3, max_r
             found = repair_move(prob, ens, ap, empty_targets_of_type, max_nodes, seen_states)
             repairs += found is not None
         if found is None and repairs < max_repairs:
-            found = open_door(prob, ens, ap, empty_targets_of_type, seen_states)
-            repairs += found is not None
+            door = open_door(prob, ens, ap, empty_targets_of_type, seen_states)
+            if door is not None:
+                c, mv, cell, pocket = door
+                doors[cell] = pocket
+                found = (c, mv)
+                repairs += 1
+        if found is None and shakes < max_shakes:
+            found = shake(prob, ens, ap, rng, seen_states)
+            shakes += found is not None
         if found is None:
             break
         c, moves = found
@@ -259,10 +350,17 @@ def solve(prob, max_nodes=200000, verbose=True, time_limit=None, urgent=3, max_r
             assert ok, "path became illegal"
             commands.append((c, m))
         banned.clear()
+        cor = prob.correct(ens)
+        if prob.fitness_from(cor, len(commands)) < prob.fitness_from(*best):
+            best = (cor, len(commands))
         if verbose and len(commands) and (prob.correct(ens) % 10 == 0):
             print(f"  correct {prob.correct(ens)}/{prob.n}  moves {len(commands)}  {time.time()-t0:.0f}s", flush=True)
         if time_limit and time.time() - t0 > time_limit:
             break
+    # Repairs and shakes can make things worse for a while: keep the best prefix seen.
+    commands = commands[:best[1]]
+    ens = prob.ensemble()
+    ens.apply(commands)
     return ens, commands
 
 
@@ -273,9 +371,11 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--time-limit", type=float, default=None)
     ap.add_argument("--urgent", type=int, default=3, help="0 disables the walled-in-first rule")
+    ap.add_argument("--deep-first", action="store_true", help="fill the target from the inside out")
+    ap.add_argument("--seed", type=int, default=None, help="randomize tie-breaking (for restarts)")
     a = ap.parse_args()
     prob = Problem(a.problem, a.root)
-    ens, cmds = solve(prob, time_limit=a.time_limit, urgent=a.urgent)
+    ens, cmds = solve(prob, time_limit=a.time_limit, urgent=a.urgent, seed=a.seed, deep_first=a.deep_first)
     print(f"{a.problem}: correct {prob.correct(ens)}/{prob.n}, moves {len(cmds)}, fitness {prob.fitness(ens, len(cmds)):.6f}")
     out = a.out or f"{a.problem}_greedy.npy"
     np.save(out, prob.chromosome(cmds))

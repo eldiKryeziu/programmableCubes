@@ -168,6 +168,10 @@ class Problem:
         F = 0.9 * self.correct(ens) / self.n + 0.1 * (1 - n_commands / self.max_cmds)
         return -(F - self.offset) / (1 - self.offset)
 
+    def fitness_from(self, n_correct, n_commands):
+        F = 0.9 * n_correct / self.n + 0.1 * (1 - n_commands / self.max_cmds)
+        return -(F - self.offset) / (1 - self.offset)
+
     def chromosome(self, commands):
         x = []
         for c, m in commands:

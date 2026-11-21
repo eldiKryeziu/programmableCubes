@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 SpOC3/
 *.log
+cpp/cubes
+cpp/*.txt

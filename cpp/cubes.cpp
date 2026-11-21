@@ -385,15 +385,18 @@ struct Params {
     bool seal = true;
 };
 
-static vector<pair<int, int>> solve(const Params& prm) {
+// Continue the greedy from the state reached by `prefix` (empty prefix = from the start).
+static vector<pair<int, int>> solve(const Params& prm, vector<pair<int, int>> prefix = {}) {
     State s = init_state();
-    vector<pair<int, int>> cmds;
+    for (auto& cm : prefix)
+        if (!try_move(s, cm.first, cm.second)) { fprintf(stderr, "prefix has an illegal move\n"); exit(2); }
+    vector<pair<int, int>> cmds = prefix;
     mt19937_64 rng(prm.seed);
     auto t0 = chrono::steady_clock::now();
     unordered_set<uint64_t> seen;
     unordered_map<int, int> doors;  // door cell -> pocket cell
     int repairs = 0, shakes = 0;
-    pair<int, int> best = {s.correct, 0};
+    pair<int, int> best = {s.correct, (int)cmds.size()};
     Banned banned;
     vector<vector<int>> goals(P.ntypes), tier(P.ntypes);
 
@@ -587,6 +590,52 @@ int main(int argc, char** argv) {
         int c, m, n = 0, legal = 0;
         while (fscanf(fp, "%d %d", &c, &m) == 2) { n++; legal += try_move(s, c, m); }
         printf("commands %d legal %d correct %d fitness %.10f\n", n, legal, s.correct, fitness_from(s.correct, n));
+        return 0;
+    }
+    if (mode == "polish") {
+        // ./cubes polish <problem.txt> <in.txt> <out.txt> <iterations> <seed> [time_limit_s]
+        // Iterated local search: cut the best solution at a random point near its end, re-run the greedy
+        // from there with a fresh seed, keep the result if it scores better.
+        vector<pair<int, int>> best;
+        {
+            FILE* fp = fopen(argv[3], "r");
+            int c, m;
+            while (fscanf(fp, "%d %d", &c, &m) == 2) best.push_back({c, m});
+            fclose(fp);
+        }
+        int iters = atoi(argv[5]);
+        mt19937_64 rng(strtoull(argv[6], 0, 10));
+        double tl = argc > 7 ? atof(argv[7]) : 1e18;
+        auto t0 = chrono::steady_clock::now();
+        auto score = [&](const vector<pair<int, int>>& c) {
+            State s = init_state();
+            for (auto& cm : c) try_move(s, cm.first, cm.second);
+            return make_pair(fitness_from(s.correct, c.size()), s.correct);
+        };
+        auto bs = score(best);
+        for (int it = 0; it < iters; it++) {
+            if (chrono::duration<double>(chrono::steady_clock::now() - t0).count() > tl) break;
+            // cut point: keep 50..99.9% of the moves, biased towards the end
+            double u = uniform_real_distribution<double>(0, 1)(rng);
+            int keep = (int)(best.size() * (1.0 - 0.5 * u * u * u));
+            Params prm;
+            prm.seed = rng();
+            prm.urgent = 2 + rng() % 3;
+            prm.seal = rng() % 2;
+            vector<pair<int, int>> prefix(best.begin(), best.begin() + keep);
+            auto cand = solve(prm, prefix);
+            auto cs = score(cand);
+            if (cs.first < bs.first) {
+                best = cand;
+                bs = cs;
+                printf("iter %d keep %d -> correct %d moves %zu fitness %.6f\n", it, keep, cs.second, best.size(), cs.first);
+                fflush(stdout);
+                FILE* fp = fopen(argv[4], "w");
+                for (auto& cm : best) fprintf(fp, "%d %d\n", cm.first, cm.second);
+                fclose(fp);
+            }
+        }
+        printf("final correct %d moves %zu fitness %.6f\n", bs.second, best.size(), bs.first);
         return 0;
     }
     if (mode == "solve") {

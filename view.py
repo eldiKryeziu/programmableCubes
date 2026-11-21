@@ -1,7 +1,8 @@
 """Show a solution in 3D: start shape, your result, and the target, side by side (matplotlib).
 
-Colours are the official ones from problems/<name>.json. In "Your result", cubes on a wrong cell are
-drawn red, and target cells that are still empty are drawn as faint grey outlines.
+Colours are the official cube-type colours from problems/<name>.json (so red, orange etc. are just cube
+types). Problems are marked with symbols in "Your result": a magenta X on every cube that sits on a
+wrong cell, and a cyan circle on every target cell that is still empty.
 
 Linux/macOS:  python3 view.py "$CH" JWST solutions/JWST.npy
 PowerShell:   python view.py $CH JWST solutions\\JWST.npy
@@ -24,16 +25,15 @@ def load_cmds(x):
 
 
 def voxels(ax, cells, colours, lo, shape, alpha=0.6, edge="k"):
-    """cells: list of (position, colour index or colour string)."""
-    by_colour = {}
+    """cells: list of (position, colour index). Drawn in ONE voxels call so faces are depth-sorted together."""
+    from matplotlib.colors import to_rgba
+    grid = np.zeros(shape, dtype=bool)
+    face = np.zeros(tuple(shape) + (4,))
     for p, c in cells:
-        by_colour.setdefault(c, []).append(p)
-    for c, ps in by_colour.items():
-        grid = np.zeros(shape, dtype=bool)
-        for p in ps:
-            grid[p[0] - lo[0], p[1] - lo[1], p[2] - lo[2]] = True
-        face = colours[c] if isinstance(c, (int, np.integer)) else c
-        ax.voxels(grid, facecolors=face, edgecolors=edge, alpha=alpha, linewidth=0.3)
+        i = (p[0] - lo[0], p[1] - lo[1], p[2] - lo[2])
+        grid[i] = True
+        face[i] = to_rgba(colours[c] if isinstance(c, (int, np.integer)) else c, alpha)
+    ax.voxels(grid, facecolors=face, edgecolors=edge, linewidth=0.3)
 
 
 def main():
@@ -61,7 +61,7 @@ def main():
 
     start = [(tuple(int(v) for v in p), int(t)) for p, t in zip(prob.init_pos, prob.init_types) if keep(int(t))]
     target = [(p, t) for p, t in prob.target.items() if keep(t)]
-    result = []
+    result, wrong = [], []
     for c, p in enumerate(ens.pos):
         t = ens.types[c]
         if not keep(t):
@@ -69,8 +69,10 @@ def main():
         ok = prob.target.get(p) == t
         if ok and a.only_wrong:
             continue
-        result.append((p, t if ok else "red"))
-    missing = [(p, "lightgrey") for p, t in prob.target.items()
+        result.append((p, t))
+        if not ok:
+            wrong.append(p)
+    missing = [p for p, t in prob.target.items()
                if keep(t) and not (p in ens.at and ens.types[ens.at[p]] == t)]
 
     allp = np.array([p for p, _ in start + target + result] or [(0, 0, 0)])
@@ -79,15 +81,22 @@ def main():
 
     fig = plt.figure(figsize=(16, 6))
     fig.suptitle(f"{a.problem}: {correct}/{prob.n} cubes correct, {len(cmds)} moves "
-                 f"({len(cmds) - legal} illegal), fitness {fit:.6f}   (red = wrong cell, grey = empty target cell)")
+                 f"({len(cmds) - legal} illegal), fitness {fit:.6f}   \n"
+                 f"Colours = cube types.  In 'Your result': magenta X = cube on a wrong cell ({len(wrong)}), "
+                 f"cyan O = empty target cell ({len(missing)})")
     axes = []
     for k, (title, cells) in enumerate([("Start", start), ("Your result", result), ("Target", target)]):
-        ax = fig.add_subplot(1, 3, k + 1, projection="3d")
+        ax = fig.add_subplot(1, 3, k + 1, projection="3d", computed_zorder=False)
         ax.set_title(title, y=0.95)
         voxels(ax, cells, colours, lo, shape)
-        if title == "Your result" and missing:
-            voxels(ax, missing, colours, lo, shape, alpha=0.15, edge="grey")
-        ax.set_box_aspect(shape, zoom=1.4)
+        if title == "Your result":
+            # markers drawn on top of the cubes (centre of each cell), never confused with a type colour
+            for pts, mk, col in [(wrong, "X", "magenta"), (missing, "o", "cyan")]:
+                if pts:
+                    q = np.array(pts) - lo + 0.5
+                    ax.scatter(q[:, 0], q[:, 1], q[:, 2], marker=mk, s=160, c=col, edgecolors="black",
+                               linewidths=1.0, depthshade=False, zorder=10)
+        ax.set_box_aspect(shape, zoom=1.1)
         ax.set_axis_off()
         ax.set_proj_type("ortho")
         axes.append(ax)

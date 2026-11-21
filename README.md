@@ -19,7 +19,7 @@ CH="SpOC3/Challenge 3 Programmable Cubes"
 | test_sim.py | Checks cubesim against the official UDP: `python3 test_sim.py "$CH"` |
 | greedy.py, restarts.py, shorten.py | Original Python solver, seed runner and move shortener (slower; kept for reference). |
 | verify.py | Scores a saved chromosome with the official UDP: `python3 verify.py "$CH" ISS solutions/ISS.npy` |
-| view.py | 3D picture of a solution: start, your result (red = wrong cell, grey = empty target cell) and target, side by side. Drag to rotate. `python3 view.py "$CH" JWST solutions/JWST.npy` (add `--save jwst.png` for an image, `--only-wrong` to see just the problems) |
+| view.py | 3D picture of a solution: start, your result (magenta X = cube on a wrong cell, cyan O = empty target cell; colours are cube types) and target, side by side. Drag to rotate. `python3 view.py "$CH" JWST solutions/JWST.npy` (add `--save jwst.png` for an image, `--only-wrong` to see just the problems) |
 | diag.py | Shows which cubes/cells are left unsolved. |
 | solutions/ | Best chromosomes so far (.npy, ends with -1). Every tool here refuses to overwrite a better file. |
 

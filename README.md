@@ -37,6 +37,6 @@ Results (official fitness, lower is better, -1 is perfect):
 | --- | --- | --- | --- |
 | ISS | 148/148 | 502 | -0.98908 |
 | JWST | 642/643 | 4017 | -0.97887 |
-| Enterprise | 1467/1472 | 9262 | -0.98226 |
+| Enterprise | 1467/1472 | 9237 | -0.98230 |
 
 All three checked with the official `programmable_cubes_UDP.fitness` (2026-11-21).
